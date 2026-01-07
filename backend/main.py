@@ -30,7 +30,7 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         # ACCURATE MODEL NAME: Use 'gemini-1.5-flash' directly.
         # This is the standard string for the v1beta generateContent endpoint.
         response = client.models.generate_content(
-            model='gemini-1.5-flash', 
+            model='gemini-pro', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
             config=types.GenerateContentConfig(
                 system_instruction="You are a feedback analyzer. Return ONLY JSON.",
