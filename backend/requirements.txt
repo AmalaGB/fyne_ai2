@@ -1,7 +1,6 @@
-# Remove: google-generativeai
-google-genai
 fastapi
 uvicorn
 sqlalchemy
 psycopg2-binary
-python-dotenv
+google-genai
+google-api-core
