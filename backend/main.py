@@ -1,13 +1,17 @@
 import os
 import json
-import time
+import asyncio # Changed from time
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from google import genai 
 from google.genai import types 
-from google.api_core import exceptions # Important for catching rate limits
+from google.api_core import exceptions
 import database, schemas
+
+# Initialize Database
+from database import engine, Base
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
@@ -24,57 +28,59 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     max_retries = 3
-    retry_delay = 2  # Initial wait time in seconds
+    retry_delay = 2 
     
     for attempt in range(max_retries):
         try:
-            # Using 1.5-flash for more stable rate limits on free tier
+            # Using the 8b model for the highest possible free-tier stability
             response = client.models.generate_content(
-                model='gemini-1.5-flash-8b', 
-                contents=f"Analyze feedback: {request.rating}/5 stars. Text: {request.review_text}",
+              
+                model='gemini-1.5-flash'
+                contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
                 config=types.GenerateContentConfig(
-                    system_instruction="""
-                    You are a feedback analyzer. Respond ONLY with a JSON object.
-                    {
-                        "user_reply": "short polite reply",
-                        "summary": "1 sentence summary",
-                        "actions": ["action 1", "action 2"]
-                    }
-                    """,
+                    system_instruction="Return ONLY a JSON object: {\"user_reply\": \"...\", \"summary\": \"...\", \"actions\": []}",
                     response_mime_type="application/json"
                 )
             )
 
-            ai_data = response.parsed if response.parsed else json.loads(response.text)
+            # Safely parse the response
+            try:
+                ai_data = response.parsed if response.parsed else json.loads(response.text)
+            except:
+                # Emergency fallback if JSON parsing fails
+                ai_data = {
+                    "user_reply": "Thank you for your rating!",
+                    "summary": "User provided a rating.",
+                    "actions": []
+                }
 
             # Success: Save to Database
             new_entry = database.FeedbackRecord(
                 rating=request.rating,
                 review_text=request.review_text,
                 ai_user_response=ai_data.get('user_reply', "Thank you!"),
-                ai_summary=ai_data.get('summary', "Summary processed"),
+                ai_summary=ai_data.get('summary', "Review processed."),
                 ai_actions=ai_data.get('actions', [])
             )
             db.add(new_entry)
             db.commit()
 
-            return {"status": "success", "ai_user_response": ai_data.get('user_reply', "Thank you!")}
+            return {"status": "success", "ai_user_response": ai_data.get('user_reply')}
 
         except exceptions.ResourceExhausted:
-            # If we hit a rate limit (429), wait and try again
             if attempt < max_retries - 1:
-                print(f"Rate limit hit. Retrying in {retry_delay}s... (Attempt {attempt + 1})")
-                time.sleep(retry_delay)
-                retry_delay *= 2  # Wait longer next time
+                # CRITICAL: Use asyncio.sleep instead of time.sleep
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
                 continue
             else:
-                break # Give up and use fallback after 3 tries
+                break 
 
         except Exception as e:
-            print(f"AI ERROR: {str(e)}")
-            break # Go to fallback for other errors
+            print(f"DEBUG ERROR: {str(e)}")
+            break 
 
-    # FINAL FALLBACK: If AI fails or is exhausted
+    # FINAL FALLBACK (Saves to DB even if AI is dead)
     fallback_entry = database.FeedbackRecord(
         rating=request.rating,
         review_text=request.review_text,
