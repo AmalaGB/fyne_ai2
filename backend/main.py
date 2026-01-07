@@ -1,6 +1,5 @@
 import os
 import json
-import asyncio
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -21,16 +20,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Client - Explicitly using the Gemini API Key
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Explicitly initialize the client for Google AI (not Vertex AI)
+# Ensure GEMINI_API_KEY is your key from AI Studio
+client = genai.Client(api_key=os.getenv("AIzaSyA1wDoksDgybCSOkdkCreE1UI4IWbHjQBI"))
 
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
-        # THE FIX: Try 'gemini-1.5-flash-8b' or 'gemini-1.5-flash'. 
-        # If 'models/...' failed, we use the bare string.
+        # ACCURATE MODEL NAME: Use 'gemini-1.5-flash' directly.
+        # This is the standard string for the v1beta generateContent endpoint.
         response = client.models.generate_content(
-            model='gemini-1.5-flash-8b', 
+            model='gemini-1.5-flash', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
             config=types.GenerateContentConfig(
                 system_instruction="You are a feedback analyzer. Return ONLY JSON.",
@@ -38,41 +38,44 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
             )
         )
 
-        # Handling different response formats
-        if hasattr(response, 'parsed') and response.parsed:
+        # Handle the parsed response correctly
+        # The latest SDK uses .parsed for JSON mode
+        if response.parsed:
             ai_data = response.parsed
         else:
-            # Manual extraction
+            # Manual fallback if parsed is unavailable
             clean_text = response.text.strip()
             if "```json" in clean_text:
                 clean_text = clean_text.split("```json")[1].split("```")[0].strip()
             ai_data = json.loads(clean_text)
 
+        # Success: Save to Database
         new_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
             ai_user_response=ai_data.get('user_reply', "Thank you for your feedback!"),
-            ai_summary=ai_data.get('summary', "Review processed."),
+            ai_summary=ai_data.get('summary', "Review received and processed."),
             ai_actions=ai_data.get('actions', [])
         )
         db.add(new_entry)
         db.commit()
-        return {"status": "success", "ai_user_response": ai_data.get('user_reply', "Success")}
+        return {"status": "success", "ai_user_response": ai_data.get('user_reply')}
 
     except Exception as e:
+        # Logging for your Render console
         print(f"!!! DIAGNOSTIC ERROR: {str(e)}")
         
-        # Fallback record so the dashboard still shows the review
+        # Professional Fallback
         fallback_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
-            ai_user_response="Thank you!",
-            ai_summary="AI Processing Error (Check Logs)",
-            ai_actions=["Manual Review Required"]
+            ai_user_response="Thank you for your feedback!",
+            ai_summary="AI Analysis Pending",
+            ai_actions=["Manual review needed"]
         )
         db.add(fallback_entry)
         db.commit()
-        return {"status": "partial_success", "ai_user_response": "Thank you!"}
+        return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
 
 @app.get("/api/admin/list")
 async def list_feedback(db: Session = Depends(database.get_db)):
