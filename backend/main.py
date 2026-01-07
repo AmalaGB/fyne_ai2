@@ -61,6 +61,7 @@ async def health_check():
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
         # Generate structured AI analysis with correct v1 SDK parameters
+        # FIXED: Use snake_case for system_instruction and response_mime_type
         response = client.models.generate_content(
             model='gemini-1.5-flash', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
@@ -70,7 +71,7 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
             )
         )
 
-        # Use the SDK's built-in parser
+        # Use the SDK's built-in parser or fallback to json.loads
         ai_data = response.parsed if response.parsed else json.loads(response.text)
 
         # Create Database Record
@@ -88,9 +89,8 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
 
     except Exception as e:
         db.rollback()
-        print(f"!!! DIAGNOSTIC ERROR: {str(e)}")
-        # Professional fallback for UI
-        return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
+        print(f"!!! DIAGNOSTIC ERROR: {str(e)}") # Log the error for Render logs
+        return {"status": "error", "ai_user_response": "Thank you for your feedback!"}
 
 @app.get("/api/admin/list")
 async def list_feedback(db: Session = Depends(database.get_db)):
