@@ -13,10 +13,8 @@ export default function Page() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (rating === 0) return alert("Please select a star rating!");
-    
     setLoading(true);
     setStatus("idle");
-    setAiResponse(null);
 
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/submit`, {
@@ -24,41 +22,41 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rating, review_text: feedback })
       });
-
       const data = await response.json();
-
       if (response.ok) {
         setStatus("success");
         setAiResponse(data.ai_user_response);
         setFeedback(""); 
         setRating(0);
-      } else {
-        throw new Error("Failed");
-      }
+      } else { throw new Error(); }
     } catch (err) {
       setStatus("error");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   return (
-    // This div centers everything on the screen
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+    /* Force Center using Inline Styles */
+    <div style={{ 
+      display: 'flex', 
+      flexDirection: 'column',
+      alignItems: 'center', 
+      justifyContent: 'center', 
+      minHeight: '100vh', 
+      backgroundColor: '#f9fafb',
+      padding: '20px',
+      fontFamily: 'sans-serif'
+    }}>
       
-      <div className="max-w-md w-full">
-        <h1 className="text-3xl font-extrabold mb-8 text-center text-gray-900 tracking-tight">
+      <div style={{ maxWidth: '400px', width: '100%' }}>
+        <h1 style={{ textAlign: 'center', color: '#111827', marginBottom: '2rem', fontSize: '28px', fontWeight: 'bold' }}>
           Customer Feedback
         </h1>
         
-        <form onSubmit={handleSubmit} className="bg-white shadow-2xl rounded-3xl p-8 border border-gray-100 transition-all">
+        <form onSubmit={handleSubmit} style={{ backgroundColor: 'white', padding: '30px', borderRadius: '20px', boxShadow: '0 10px 25px rgba(0,0,0,0.1)' }}>
           
-          {/* Requirement: Stars centered and yellow */}
-          <div className="mb-10 text-center">
-            <label className="block text-gray-500 text-sm font-semibold uppercase tracking-wider mb-4">
-              Tap to Rate
-            </label>
-            <div className="flex justify-center items-center gap-3">
+          <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+            <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '15px', fontWeight: '600' }}>TAP A STAR TO RATE</p>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '10px' }}>
               {[1, 2, 3, 4, 5].map((num) => (
                 <button
                   key={num}
@@ -66,60 +64,65 @@ export default function Page() {
                   onClick={() => setRating(num)}
                   onMouseEnter={() => setHover(num)}
                   onMouseLeave={() => setHover(0)}
-                  className="focus:outline-none transform transition-transform hover:scale-125 active:scale-95"
+                  style={{ 
+                    background: 'none', 
+                    border: 'none', 
+                    cursor: 'pointer', 
+                    fontSize: '45px',
+                    outline: 'none',
+                    /* FORCE YELLOW COLOR */
+                    color: (hover || rating) >= num ? '#fbbf24' : '#e5e7eb',
+                    transition: 'color 0.2s'
+                  }}
                 >
-                  <span className={`text-5xl leading-none transition-colors duration-200 
-                    ${(hover || rating) >= num ? "text-yellow-400" : "text-gray-200"}
-                    ${rating >= num ? "text-yellow-500" : ""} 
-                  `}>
-                    ★
-                  </span>
+                  ★
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="mb-6">
-            <textarea 
-              required
-              value={feedback}
-              onChange={(e) => setFeedback(e.target.value)}
-              placeholder="What can we improve?..."
-              className="w-full border-0 bg-gray-50 rounded-2xl p-5 text-gray-800 h-32 focus:ring-2 focus:ring-yellow-400 outline-none transition-all placeholder:text-gray-400"
-            />
-          </div>
+          <textarea 
+            required
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder="Tell us more..."
+            style={{ 
+              width: '100%', 
+              border: '1px solid #e5e7eb', 
+              borderRadius: '12px', 
+              padding: '15px', 
+              height: '120px', 
+              marginBottom: '20px',
+              fontSize: '16px',
+              boxSizing: 'border-box'
+            }}
+          />
 
           <button 
             type="submit"
             disabled={loading}
-            className={`w-full py-4 rounded-2xl text-white font-bold text-lg transition-all shadow-xl active:scale-95 ${
-              loading ? "bg-gray-300 cursor-not-allowed" : "bg-gray-900 hover:bg-black hover:shadow-2xl"
-            }`}
+            style={{ 
+              width: '100%', 
+              padding: '15px', 
+              borderRadius: '12px', 
+              backgroundColor: loading ? '#d1d5db' : '#000000', 
+              color: 'white', 
+              fontWeight: 'bold', 
+              fontSize: '16px',
+              border: 'none',
+              cursor: loading ? 'not-allowed' : 'pointer'
+            }}
           >
-            {loading ? "Analyzing..." : "Submit Review"}
+            {loading ? "Processing..." : "Submit Review"}
           </button>
         </form>
 
-        {/* AI Success Feedback Section */}
-        <div className="mt-8">
-          {status === "success" && (
-            <div className="bg-white border border-green-100 p-6 rounded-3xl shadow-lg animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <h3 className="text-green-900 font-bold">AI Assistant Says:</h3>
-              </div>
-              <p className="text-gray-700 leading-relaxed italic">
-                "{aiResponse}"
-              </p>
-            </div>
-          )}
-
-          {status === "error" && (
-            <div className="bg-red-50 text-red-700 p-4 rounded-2xl text-center font-medium">
-              Connection error. Please try again.
-            </div>
-          )}
-        </div>
+        {status === "success" && (
+          <div style={{ marginTop: '25px', padding: '20px', backgroundColor: '#ecfdf5', borderRadius: '15px', borderLeft: '5px solid #10b981' }}>
+            <h4 style={{ margin: '0 0 10px 0', color: '#065f46' }}>AI Response:</h4>
+            <p style={{ margin: 0, color: '#374151', fontStyle: 'italic' }}>"{aiResponse}"</p>
+          </div>
+        )}
       </div>
     </div>
   );
