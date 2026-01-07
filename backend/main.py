@@ -30,7 +30,7 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         try:
             # Using 1.5-flash for more stable rate limits on free tier
             response = client.models.generate_content(
-                model='gemini-1.5-flash', 
+                model='gemini-1.5-flash-8b', 
                 contents=f"Analyze feedback: {request.rating}/5 stars. Text: {request.review_text}",
                 config=types.GenerateContentConfig(
                     system_instruction="""
