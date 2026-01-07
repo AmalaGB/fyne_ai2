@@ -2,9 +2,13 @@
 
 ### Deployment Links
 
-- **Task 2 (AI Feedback Dashboard):** 
-Main API Link: https://fyne-ai2.onrender.com/docs 
-Admin List Link: https://fyne-ai2.onrender.com/api/admin/list
+- **Task 2 (AI Feedback Dashboard):**
+- 
+• API Docs: https://fyne-ai2.onrender.com/docs 
+• Admin List: https://fyne-ai2.onrender.com/api/admin/list 
+Dashboards: 
+User Dashboard URL:  https://fyne-ai2.vercel.app/ 
+Admin Dashboard URL: https://admin-dashboard-beta-five-56.vercel.app/
 
 ### 📂 Repository Contents
 - `Task_1_Notebook.ipynb`: Data analysis and model testing.
