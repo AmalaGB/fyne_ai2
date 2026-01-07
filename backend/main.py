@@ -1,6 +1,6 @@
 import os
 import json
-import asyncio # Changed from time
+import asyncio
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -32,38 +32,36 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
     
     for attempt in range(max_retries):
         try:
-            # Using the 8b model for the highest possible free-tier stability
+            # Generate content using Gemini 1.5 Flash
             response = client.models.generate_content(
                 model='gemini-1.5-flash',
-                
                 contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
                 config=types.GenerateContentConfig(
-    system_instruction="""
-    You are a feedback analyzer. 
-    Output ONLY raw JSON. No markdown, no backticks.
-    Expected format:
-    {
-        "user_reply": "string",
-        "summary": "string",
-        "actions": ["string", "string"]
-    }
-    """,
-    response_mime_type="application/json"
-)
+                    system_instruction="""
+                    You are a feedback analyzer. 
+                    Output ONLY raw JSON. No markdown, no backticks.
+                    Expected format:
+                    {
+                        "user_reply": "string",
+                        "summary": "string",
+                        "actions": ["string", "string"]
+                    }
+                    """,
+                    response_mime_type="application/json"
+                )
             )
 
-            # Safely parse the response
+            # Parse AI response
             try:
                 ai_data = response.parsed if response.parsed else json.loads(response.text)
-            except:
-                # Emergency fallback if JSON parsing fails
+            except Exception:
                 ai_data = {
                     "user_reply": "Thank you for your rating!",
                     "summary": "User provided a rating.",
                     "actions": []
                 }
 
-            # Success: Save to Database
+            # Save to Database
             new_entry = database.FeedbackRecord(
                 rating=request.rating,
                 review_text=request.review_text,
@@ -78,18 +76,15 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
 
         except exceptions.ResourceExhausted:
             if attempt < max_retries - 1:
-                # CRITICAL: Use asyncio.sleep instead of time.sleep
                 await asyncio.sleep(retry_delay)
                 retry_delay *= 2
                 continue
-            else:
-                break 
-
+            break 
         except Exception as e:
-            print(f"DEBUG ERROR: {str(e)}")
+            print(f"!!! REAL AI ERROR: {type(e).__name__} - {str(e)}")
             break 
 
-    # FINAL FALLBACK (Saves to DB even if AI is dead)
+    # FINAL FALLBACK
     fallback_entry = database.FeedbackRecord(
         rating=request.rating,
         review_text=request.review_text,
