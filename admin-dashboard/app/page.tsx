@@ -2,87 +2,105 @@
 import { useEffect, useState } from 'react'
 
 export default function AdminPanel() {
-  const [data, setData] = useState<any[]>([]) // Initialize as empty array
+  const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
+  // Auto-refresh function
+  const fetchData = async () => {
     const backendUrl = process.env.NEXT_PUBLIC_API_URL;
-    
-    if (!backendUrl) {
-      setError("Backend URL is not configured in Environment Variables.");
+    if (!backendUrl) return;
+
+    try {
+      const res = await fetch(`${backendUrl}/api/admin/list`);
+      if (!res.ok) throw new Error(`Server Error: ${res.status}`);
+      const result = await res.json();
+      if (Array.isArray(result)) {
+        setData(result);
+      }
+    } catch (err) {
+      console.error("Fetch error:", err);
+    } finally {
       setLoading(false);
-      return;
     }
+  };
 
-    fetch(`${backendUrl}/api/admin/list`)
-      .then(res => {
-        if (!res.ok) throw new Error(`Server Error: ${res.status}`);
-        return res.json();
-      })
-      .then(result => {
-        // SAFETY CHECK: Ensure the result is actually an array
-        if (Array.isArray(result)) {
-          setData(result);
-        } else {
-          console.error("Received non-array data:", result);
-          setData([]);
-        }
-      })
-      .catch(err => {
-        console.error("Fetch error:", err);
-        setError("Could not connect to backend. Make sure Render is live.");
-      })
-      .finally(() => setLoading(false));
-  }, [])
+  useEffect(() => {
+    fetchData(); // Initial fetch
 
-  if (loading) return <div className="p-10 text-center text-gray-500">Connecting to AI Backend...</div>;
-  if (error) return <div className="p-10 text-center text-red-500 font-bold">{error}</div>;
+    // REQUIREMENT: Auto-refreshing list (every 10 seconds)
+    const interval = setInterval(fetchData, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Analytics Logic: Calculate Rating Counts
+  const totalSubmissions = data.length;
+  const avgRating = totalSubmissions > 0 
+    ? (data.reduce((acc, curr) => acc + curr.rating, 0) / totalSubmissions).toFixed(1) 
+    : 0;
+
+  if (loading) return <div style={{ textAlign: 'center', padding: '50px', color: '#6b7280' }}>Loading Admin Data...</div>;
+  if (error) return <div style={{ textAlign: 'center', padding: '50px', color: '#ef4444' }}>{error}</div>;
 
   return (
-    <main className="p-10 bg-white min-h-screen text-black">
-      <h1 className="text-3xl font-bold mb-6">Evaluation Results</h1>
+    <main style={{ padding: '40px', backgroundColor: '#f3f4f6', minHeight: '100vh', fontFamily: 'sans-serif', color: '#111827' }}>
       
-      {data.length === 0 ? (
-        <div className="p-10 border-2 border-dashed rounded text-center text-gray-400">
-          No feedback entries found in the database.
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        <h1 style={{ fontSize: '32px', fontWeight: 'bold', marginBottom: '30px' }}>Admin Evaluation Dashboard</h1>
+
+        {/* ANALYTICS SECTION */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '30px' }}>
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '15px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
+            <p style={{ color: '#6b7280', margin: 0, fontSize: '14px' }}>Total Reviews</p>
+            <h2 style={{ fontSize: '28px', margin: '5px 0 0 0' }}>{totalSubmissions}</h2>
+          </div>
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '15px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
+            <p style={{ color: '#6b7280', margin: 0, fontSize: '14px' }}>Average Rating</p>
+            <h2 style={{ fontSize: '28px', margin: '5px 0 0 0', color: '#fbbf24' }}>★ {avgRating}</h2>
+          </div>
         </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full border-collapse border border-gray-200">
-            <thead className="bg-gray-100">
+
+        {/* FEEDBACK LIST */}
+        <div style={{ backgroundColor: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 10px 15px rgba(0,0,0,0.1)' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead style={{ backgroundColor: '#111827', color: 'white' }}>
               <tr>
-                <th className="border p-3 text-left">Rating</th>
-                <th className="border p-3 text-left">Original Review</th>
-                <th className="border p-3 text-left">AI Summary</th>
-                <th className="border p-3 text-left">Recommended Actions</th>
+                <th style={{ padding: '15px', textAlign: 'left' }}>Rating</th>
+                <th style={{ padding: '15px', textAlign: 'left' }}>User Review</th>
+                <th style={{ padding: '15px', textAlign: 'left' }}>AI Summary</th>
+                <th style={{ padding: '15px', textAlign: 'left' }}>Recommended Actions</th>
               </tr>
             </thead>
             <tbody>
-              {data.map((item: any) => (
-                <tr key={item.id} className="hover:bg-gray-50">
-                  <td className="border p-3 text-center font-bold">{item.rating}/5</td>
-                  <td className="border p-3 text-sm">{item.review_text}</td>
-                  <td className="border p-3 text-sm italic text-gray-700">
-                    {item.ai_summary || "Processing..."}
+              {data.map((item) => (
+                <tr key={item.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                  <td style={{ padding: '15px', fontWeight: 'bold', color: '#fbbf24', fontSize: '18px' }}>
+                    {item.rating} ★
                   </td>
-                  <td className="border p-3">
-                    <ul className="list-disc ml-4 text-xs space-y-1">
-                      {Array.isArray(item.ai_actions) && item.ai_actions.length > 0 ? (
-                        item.ai_actions.map((act: string, i: number) => (
-                          <li key={i} className="text-blue-700">{act}</li>
-                        ))
-                      ) : (
-                        <li className="text-gray-400 italic">No actions recommended</li>
-                      )}
-                    </ul>
+                  <td style={{ padding: '15px', fontSize: '14px', maxWidth: '300px' }}>
+                    {item.review_text}
+                  </td>
+                  <td style={{ padding: '15px', fontSize: '14px', fontStyle: 'italic', color: '#4b5563' }}>
+                    {item.ai_summary}
+                  </td>
+                  <td style={{ padding: '15px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                      {Array.isArray(item.ai_actions) && item.ai_actions.map((act: any, i: number) => (
+                        <span key={i} style={{ backgroundColor: '#eff6ff', color: '#1d4ed8', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', width: 'fit-content' }}>
+                          • {act}
+                        </span>
+                      ))}
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {data.length === 0 && (
+            <div style={{ padding: '40px', textAlign: 'center', color: '#9ca3af' }}>No submissions found yet.</div>
+          )}
         </div>
-      )}
+      </div>
     </main>
-  )
+  );
 }
