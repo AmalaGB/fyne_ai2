@@ -1,5 +1,6 @@
 import os
 import json
+import uvicorn
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -20,8 +21,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- THE FIX: INITIALIZE WITH V1 STABLE ---
-# This bypasses the v1beta endpoint which was causing the 404
+# --- THE STABLE SETUP ---
+# We force 'v1' to avoid the 'v1beta' 404 errors.
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY"),
     http_options=types.HttpOptions(api_version='v1')
@@ -30,7 +31,7 @@ client = genai.Client(
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
-        # --- THE FIX: USE THE STABLE FLASH MODEL ---
+        # Use the base production model name
         response = client.models.generate_content(
             model='gemini-1.5-flash', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
@@ -40,11 +41,10 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
             )
         )
 
-        # Robust Parsing
+        # Extraction logic
         if response.parsed:
             ai_data = response.parsed
         else:
-            # Fallback string cleaning
             clean_text = response.text.strip().replace("```json", "").replace("```", "")
             ai_data = json.loads(clean_text)
 
@@ -61,17 +61,24 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
 
     except Exception as e:
         print(f"!!! DIAGNOSTIC ERROR: {str(e)}")
-        # Professional Fallback so the user isn't stuck
-        db.add(database.FeedbackRecord(
+        # Save record even on AI failure so you don't lose customer data
+        fallback = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
             ai_user_response="Thank you for your feedback!",
             ai_summary="AI Analysis Pending",
-            ai_actions=["Manual review required"]
-        ))
+            ai_actions=["Manual review"]
+        )
+        db.add(fallback)
         db.commit()
-        return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
+        return {"status": "partial_success", "ai_user_response": "Thank you!"}
 
 @app.get("/api/admin/list")
 async def list_feedback(db: Session = Depends(database.get_db)):
     return db.query(database.FeedbackRecord).order_by(database.FeedbackRecord.created_at.desc()).all()
+
+# --- RENDER PORT BINDING ---
+if __name__ == "__main__":
+    # Render sets the PORT env var; we must listen on 0.0.0.0
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
