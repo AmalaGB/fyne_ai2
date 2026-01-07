@@ -27,74 +27,53 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
-    max_retries = 3
-    retry_delay = 2 
-    
-    for attempt in range(max_retries):
-        try:
-            # Generate content using Gemini 1.5 Flash
-            response = client.models.generate_content(
-                model='gemini-1.5-flash',
-                contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
-                config=types.GenerateContentConfig(
-                    system_instruction="""
-                    You are a feedback analyzer. 
-                    Output ONLY raw JSON. No markdown, no backticks.
-                    Expected format:
-                    {
-                        "user_reply": "string",
-                        "summary": "string",
-                        "actions": ["string", "string"]
-                    }
-                    """,
-                    response_mime_type="application/json"
-                )
+    # 1. Validation: Gemini sometimes fails on empty or 1-character reviews
+    review_content = request.review_text if len(request.review_text) > 2 else f"User gave a {request.rating} star rating."
+
+    try:
+        # 2. Call Gemini with the most stable settings
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=f"Rating: {request.rating}/5. Review: {review_content}",
+            config=types.GenerateContentConfig(
+                system_instruction="Analyze feedback. Return ONLY JSON: {'user_reply': '...', 'summary': '...', 'actions': ['...']}",
+                response_mime_type="application/json"
             )
+        )
 
-            # Parse AI response
-            try:
-                ai_data = response.parsed if response.parsed else json.loads(response.text)
-            except Exception:
-                ai_data = {
-                    "user_reply": "Thank you for your rating!",
-                    "summary": "User provided a rating.",
-                    "actions": []
-                }
+        # 3. Handle the response
+        if response.parsed:
+            ai_data = response.parsed
+        else:
+            ai_data = json.loads(response.text)
 
-            # Save to Database
-            new_entry = database.FeedbackRecord(
-                rating=request.rating,
-                review_text=request.review_text,
-                ai_user_response=ai_data.get('user_reply', "Thank you!"),
-                ai_summary=ai_data.get('summary', "Review processed."),
-                ai_actions=ai_data.get('actions', [])
-            )
-            db.add(new_entry)
-            db.commit()
+        # 4. Success Path: Save to Database
+        new_entry = database.FeedbackRecord(
+            rating=request.rating,
+            review_text=request.review_text,
+            ai_user_response=ai_data.get('user_reply', "Thank you for your feedback!"),
+            ai_summary=ai_data.get('summary', "Review processed successfully."),
+            ai_actions=ai_data.get('actions', [])
+        )
+        db.add(new_entry)
+        db.commit()
+        return {"status": "success", "ai_user_response": ai_data.get('user_reply')}
 
-            return {"status": "success", "ai_user_response": ai_data.get('user_reply')}
-
-        except exceptions.ResourceExhausted:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-                retry_delay *= 2
-                continue
-            break 
-        except Exception as e:
-            print(f"!!! REAL AI ERROR: {type(e).__name__} - {str(e)}")
-            break 
-
-    # FINAL FALLBACK
-    fallback_entry = database.FeedbackRecord(
-        rating=request.rating,
-        review_text=request.review_text,
-        ai_user_response="Thank you for your feedback!",
-        ai_summary="AI Busy (Rate Limit)",
-        ai_actions=[]
-    )
-    db.add(fallback_entry)
-    db.commit()
-    return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
+    except Exception as e:
+        # This will show the EXACT error in your Render logs (e.g., 429 Resource Exhausted)
+        print(f"!!! CRITICAL AI ERROR: {str(e)}")
+        
+        # 5. Fallback Path: Save as 'Pending' instead of 'Busy' to make it look better
+        fallback_entry = database.FeedbackRecord(
+            rating=request.rating,
+            review_text=request.review_text,
+            ai_user_response="Thank you! Your feedback has been received.",
+            ai_summary="Analysis Pending (Provider Limit)",
+            ai_actions=["Manual review required"]
+        )
+        db.add(fallback_entry)
+        db.commit()
+        return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
 
 @app.get("/api/admin/list")
 async def list_feedback(db: Session = Depends(database.get_db)):
