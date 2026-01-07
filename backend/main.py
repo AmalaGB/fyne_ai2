@@ -21,11 +21,10 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
-        # AI Prompt Logic
         model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = f"""
         Analyze feedback: {request.rating}/5 stars. Text: {request.review_text}
-        Return JSON format: 
+        Return ONLY a JSON object: 
         {{
             "user_reply": "polite reply to user",
             "summary": "1 sentence for admin",
@@ -33,23 +32,30 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         }}
         """
         response = model.generate_content(prompt)
-        ai_data = json.loads(response.text.replace('```json', '').replace('```', ''))
+        
+        # CLEANING STEP: Remove markdown backticks if they exist
+        clean_text = response.text.strip()
+        if clean_text.startswith("```"):
+            clean_text = clean_text.split("```")[1]
+            if clean_text.startswith("json"):
+                clean_text = clean_text[4:]
+        
+        ai_data = json.loads(clean_text)
 
-        # Save to Neon Database
         new_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
-            ai_user_response=ai_data['user_reply'],
-            ai_summary=ai_data['summary'],
-            ai_actions=ai_data['actions']
+            ai_user_response=ai_data.get('user_reply', "Thank you!"),
+            ai_summary=ai_data.get('summary', "Summary not available"),
+            ai_actions=ai_data.get('actions', [])
         )
         db.add(new_entry)
         db.commit()
 
-        return {"status": "success", "ai_user_response": ai_data['user_reply']}
+        return {"status": "success", "ai_user_response": ai_data.get('user_reply', "Thank you!")}
 
     except Exception as e:
-        # Graceful Failure: Save raw data even if AI fails
+        print(f"AI ERROR: {e}") # This lets you see the error in Render Logs
         fallback_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
@@ -60,7 +66,3 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         db.add(fallback_entry)
         db.commit()
         return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
-
-@app.get("/api/admin/list")
-async def list_feedback(db: Session = Depends(database.get_db)):
-    return db.query(database.FeedbackRecord).all()
