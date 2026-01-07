@@ -28,9 +28,9 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
-        # Request AI Analysis
+        # FIX: Changed model string to 'models/gemini-1.5-flash'
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='models/gemini-1.5-flash', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
             config=types.GenerateContentConfig(
                 system_instruction="Analyze feedback. Return ONLY JSON: {'user_reply': '...', 'summary': '...', 'actions': ['...']}",
@@ -38,20 +38,18 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
             )
         )
 
-        # Robust JSON parsing
-        text_content = response.text.strip()
-        # Remove markdown code blocks if AI accidentally includes them
-        if text_content.startswith("```json"):
-            text_content = text_content.replace("```json", "").replace("```", "").strip()
-        
-        ai_data = json.loads(text_content)
+        # Robust Parsing
+        if response.parsed:
+            ai_data = response.parsed
+        else:
+            # Fallback for older SDK versions
+            ai_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
 
-        # Create Database Record
         new_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
-            ai_user_response=ai_data.get('user_reply', "Thanks for your feedback!"),
-            ai_summary=ai_data.get('summary', "Review analyzed."),
+            ai_user_response=ai_data.get('user_reply', "Thank you!"),
+            ai_summary=ai_data.get('summary', "Review processed."),
             ai_actions=ai_data.get('actions', [])
         )
         db.add(new_entry)
@@ -59,17 +57,15 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         return {"status": "success", "ai_user_response": ai_data.get('user_reply')}
 
     except Exception as e:
-        print(f"!!! SYSTEM ERROR: {str(e)}")
-        
-        # Professional Fallback for the Dashboard
-        error_summary = "AI Limit Reached" if "429" in str(e) else "Processing Pending"
+        # Log the actual error to Render
+        print(f"!!! DIAGNOSTIC ERROR: {str(e)}")
         
         fallback_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
-            ai_user_response="Thank you! We have received your feedback.",
-            ai_summary=error_summary,
-            ai_actions=["Manual review recommended"]
+            ai_user_response="Thank you for your feedback!",
+            ai_summary="AI Analysis Pending",
+            ai_actions=["Manual check needed"]
         )
         db.add(fallback_entry)
         db.commit()
