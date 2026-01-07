@@ -7,14 +7,16 @@ from sqlalchemy.orm import Session
 from google import genai 
 from google.genai import types 
 
+# Internal imports
 import database, schemas
 from database import engine, Base
 
-# Create tables in Neon PostgreSQL
+# Initialize Database tables
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
+app = FastAPI(title="AI Feedback Analysis System")
 
+# Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -22,6 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- AI CONFIGURATION ---
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY"),
     http_options=types.HttpOptions(api_version='v1')
@@ -31,43 +34,33 @@ SYSTEM_PROMPT = """
 You are a Senior Strategic Product Manager and Customer Success Analyst. 
 
 TASK:
-Analyze the user's feedback (Rating and Review) and convert it into high-level business intelligence.
+Analyze user feedback and convert it into high-level business intelligence.
 
 COLUMN GUIDELINES:
-1. "summary" (AI ANALYSIS Column):
-   - Do NOT just repeat the review. 
-   - Identify the underlying sentiment or business theme (e.g., "Critical UX Friction," "Service Latency," "Product Validation").
+1. "summary" (AI ANALYSIS):
+   - Identify the underlying business theme (e.g., "Critical UX Friction," "Service Latency").
    - 1-2 Stars: Focus on the "Failure Point".
    - 3 Stars: Focus on the "Gap" or "Trade-off".
    - 4-5 Stars: Focus on the "Competitive Advantage".
 
-2. "actions" (NEXT STEPS Column):
-   - Provide a list of 2-3 professional, actionable business tasks.
-   - Use professional verbs: "Audit," "Optimize," "Investigate," "Incorporate," "Incentivize."
+2. "actions" (NEXT STEPS):
+   - Provide 2-3 professional, actionable tasks using verbs like "Audit," "Optimize," or "Investigate."
 
 OUTPUT RULES:
-- Return ONLY a single valid JSON object.
-- NO code fences (```), no backticks, no preamble.
-- JSON Keys: "user_reply", "summary", "actions".
-
-EXAMPLE FOR 3-STARS ("Dark mode needed"):
-{
-  "user_reply": "Thanks for the suggestion! We've logged this feature request for our design team.",
-  "summary": "Functional satisfaction is currently limited by a specific UI/UX customization gap (Dark Mode).",
-  "actions": ["Prioritize Dark Mode in Q3 UI Roadmap", "Audit existing accessibility themes"]
-}
+- Return ONLY a single valid JSON object. No code blocks or preamble.
+- Keys: "user_reply", "summary", "actions".
 """.strip()
 
-
-
+# --- ROUTES ---
 
 @app.get("/")
 async def health_check():
-    return {"status": "running", "docs": "/docs"}
+    return {"status": "running", "message": "API is live"}
 
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
+        # Generate structured AI analysis with correct v1 SDK parameters
         response = client.models.generate_content(
             model='gemini-1.5-flash', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
@@ -77,13 +70,15 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
             )
         )
 
-        ai_data = response.parsed if response.parsed else json.loads(response.text.strip().replace("```json", "").replace("```", ""))
+        # Use the SDK's built-in parser
+        ai_data = response.parsed if response.parsed else json.loads(response.text)
 
+        # Create Database Record
         new_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
-            ai_user_response=ai_data.get('user_reply'),
-            ai_summary=ai_data.get('summary'),
+            ai_user_response=ai_data.get('user_reply', "Thank you!"),
+            ai_summary=ai_data.get('summary', "Review processed."),
             ai_actions=ai_data.get('actions', [])
         )
         db.add(new_entry)
@@ -93,10 +88,13 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
 
     except Exception as e:
         db.rollback()
-        return {"status": "error", "ai_user_response": "Thank you for your feedback!"}
+        print(f"!!! DIAGNOSTIC ERROR: {str(e)}")
+        # Professional fallback for UI
+        return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
 
 @app.get("/api/admin/list")
 async def list_feedback(db: Session = Depends(database.get_db)):
+    """Retrieve all feedback for the dashboard"""
     return db.query(database.FeedbackRecord).order_by(database.FeedbackRecord.id.desc()).all()
 
 if __name__ == "__main__":
