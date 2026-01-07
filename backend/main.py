@@ -76,7 +76,9 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
 @app.get("/api/admin/list")
 async def list_feedback(db: Session = Depends(database.get_db)):
     return db.query(database.FeedbackRecord).order_by(database.FeedbackRecord.created_at.desc()).all()
-
+@app.get("/")
+async def root():
+    return {"message": "AI Feedback API is running. Go to /docs for API documentation."}
 # --- RENDER PORT BINDING ---
 if __name__ == "__main__":
     # Render sets the PORT env var; we must listen on 0.0.0.0
