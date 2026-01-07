@@ -1,22 +1,20 @@
 import os
 import json
 import uvicorn
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from google import genai 
 from google.genai import types 
 
-# Internal imports
 import database, schemas
 from database import engine, Base
 
-# Initialize Database tables
+# Create tables in Neon PostgreSQL
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="AI Feedback Analysis System")
+app = FastAPI()
 
-# Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -24,41 +22,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- AI CONFIGURATION ---
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY"),
     http_options=types.HttpOptions(api_version='v1')
 )
 
-# Structured Prompt (PROMPT_V3)
 SYSTEM_PROMPT = """
-You are a senior Customer Success Analyst. 
+You are a Senior Strategic Product Manager and Customer Success Analyst. 
 
-Rules:
-1. Return ONLY a single JSON object.
-2. Keys: "user_reply" (empathetic response), "summary" (brief internal notes), "actions" (list of tasks).
-3. No code fences (```), no backticks, no preamble.
+TASK:
+Analyze the user's feedback (Rating and Review) and convert it into high-level business intelligence.
 
-Example:
-Review: "App is great but keeps crashing."
-Output: {"user_reply": "Thanks for the feedback! We are fixing the crash.", "summary": "Positive sentiment with technical bug.", "actions": ["Fix checkout crash"]}
+COLUMN GUIDELINES:
+1. "summary" (AI ANALYSIS Column):
+   - Do NOT just repeat the review. 
+   - Identify the underlying sentiment or business theme (e.g., "Critical UX Friction," "Service Latency," "Product Validation").
+   - 1-2 Stars: Focus on the "Failure Point".
+   - 3 Stars: Focus on the "Gap" or "Trade-off".
+   - 4-5 Stars: Focus on the "Competitive Advantage".
+
+2. "actions" (NEXT STEPS Column):
+   - Provide a list of 2-3 professional, actionable business tasks.
+   - Use professional verbs: "Audit," "Optimize," "Investigate," "Incorporate," "Incentivize."
+
+OUTPUT RULES:
+- Return ONLY a single valid JSON object.
+- NO code fences (```), no backticks, no preamble.
+- JSON Keys: "user_reply", "summary", "actions".
+
+EXAMPLE FOR 3-STARS ("Dark mode needed"):
+{
+  "user_reply": "Thanks for the suggestion! We've logged this feature request for our design team.",
+  "summary": "Functional satisfaction is currently limited by a specific UI/UX customization gap (Dark Mode).",
+  "actions": ["Prioritize Dark Mode in Q3 UI Roadmap", "Audit existing accessibility themes"]
+}
 """.strip()
 
-# --- ROUTES ---
+
+
 
 @app.get("/")
-async def root():
-    """Health check endpoint"""
-    return {
-        "status": "online",
-        "message": "AI Feedback API is running.",
-        "docs": "/docs"
-    }
+async def health_check():
+    return {"status": "running", "docs": "/docs"}
 
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
-        # Generate structured AI analysis
         response = client.models.generate_content(
             model='gemini-1.5-flash', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
@@ -68,20 +77,13 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
             )
         )
 
-        # Parse JSON response
-        if response.parsed:
-            ai_data = response.parsed
-        else:
-            # Fallback for raw text cleanup
-            clean_text = response.text.strip().replace("```json", "").replace("```", "")
-            ai_data = json.loads(clean_text)
+        ai_data = response.parsed if response.parsed else json.loads(response.text.strip().replace("```json", "").replace("```", ""))
 
-        # Create Database Record
         new_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
-            ai_user_response=ai_data.get('user_reply', "Thank you!"),
-            ai_summary=ai_data.get('summary', "Review processed."),
+            ai_user_response=ai_data.get('user_reply'),
+            ai_summary=ai_data.get('summary'),
             ai_actions=ai_data.get('actions', [])
         )
         db.add(new_entry)
@@ -90,26 +92,13 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         return {"status": "success", "ai_user_response": ai_data.get('user_reply')}
 
     except Exception as e:
-        print(f"!!! DIAGNOSTIC ERROR: {str(e)}")
-        # Graceful degradation: Save raw data if AI fails
-        fallback = database.FeedbackRecord(
-            rating=request.rating,
-            review_text=request.review_text,
-            ai_user_response="Thank you for your feedback!",
-            ai_summary="AI Analysis Pending (Service Error)",
-            ai_actions=["Manual review required"]
-        )
-        db.add(fallback)
-        db.commit()
-        return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
+        db.rollback()
+        return {"status": "error", "ai_user_response": "Thank you for your feedback!"}
 
 @app.get("/api/admin/list")
 async def list_feedback(db: Session = Depends(database.get_db)):
-    """Retrieve all feedback records for the dashboard"""
     return db.query(database.FeedbackRecord).order_by(database.FeedbackRecord.id.desc()).all()
 
-# --- SERVER STARTUP ---
 if __name__ == "__main__":
-    # Ensure the app binds to 0.0.0.0 and the port provided by Render
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
