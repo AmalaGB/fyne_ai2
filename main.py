@@ -58,6 +58,9 @@ EXAMPLE FOR 3-STARS ("Dark mode needed"):
 }
 """.strip()
 
+
+
+
 @app.get("/")
 async def health_check():
     return {"status": "running", "docs": "/docs"}
