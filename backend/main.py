@@ -3,44 +3,46 @@ import json
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-import google.generativeai as genai
+from google import genai  # NEW SDK
+from google.genai import types # For configuration
 import database, schemas
 
 app = FastAPI()
 
-# Enable CORS for Next.js dashboards
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, replace with specific Vercel URLs
+    allow_origins=["*"], 
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# Initialize the new Client
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"""
-        Analyze feedback: {request.rating}/5 stars. Text: {request.review_text}
-        Return ONLY a JSON object: 
-        {{
-            "user_reply": "polite reply to user",
-            "summary": "1 sentence for admin",
-            "actions": ["action 1", "action 2"]
-        }}
-        """
-        response = model.generate_content(prompt)
-        
-        # CLEANING STEP: Remove markdown backticks if they exist
-        clean_text = response.text.strip()
-        if clean_text.startswith("```"):
-            clean_text = clean_text.split("```")[1]
-            if clean_text.startswith("json"):
-                clean_text = clean_text[4:]
-        
-        ai_data = json.loads(clean_text)
+        # Using the new model 'gemini-2.0-flash' for better JSON support
+        # We specify the response_mime_type so the AI sends valid JSON directly
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=f"Analyze feedback: {request.rating}/5 stars. Text: {request.review_text}",
+            config=types.GenerateContentConfig(
+                system_instruction="""
+                You are a feedback analyzer. You must respond ONLY with a JSON object.
+                Structure: 
+                {
+                    "user_reply": "string",
+                    "summary": "string",
+                    "actions": ["list", "of", "strings"]
+                }
+                """,
+                response_mime_type="application/json"
+            )
+        )
+
+        # The new SDK provides a direct way to parse JSON if mime_type is set
+        ai_data = response.parsed if response.parsed else json.loads(response.text)
 
         new_entry = database.FeedbackRecord(
             rating=request.rating,
@@ -55,14 +57,20 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         return {"status": "success", "ai_user_response": ai_data.get('user_reply', "Thank you!")}
 
     except Exception as e:
-        print(f"AI ERROR: {e}") # This lets you see the error in Render Logs
+        print(f"AI ERROR: {str(e)}") # Critical for checking Render logs
+        
+        # Fallback logic
         fallback_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
             ai_user_response="Thank you for your feedback!",
-            ai_summary="AI processing failed.",
+            ai_summary=f"AI Error: {str(e)[:50]}",
             ai_actions=[]
         )
         db.add(fallback_entry)
         db.commit()
         return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
+
+@app.get("/api/admin/list")
+async def list_feedback(db: Session = Depends(database.get_db)):
+    return db.query(database.FeedbackRecord).all()
