@@ -34,8 +34,7 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         try:
             # Using the 8b model for the highest possible free-tier stability
             response = client.models.generate_content(
-              
-                model='gemini-1.5-flash'
+                model='gemini-1.5-flash',
                 contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
                 config=types.GenerateContentConfig(
                     system_instruction="Return ONLY a JSON object: {\"user_reply\": \"...\", \"summary\": \"...\", \"actions\": []}",
