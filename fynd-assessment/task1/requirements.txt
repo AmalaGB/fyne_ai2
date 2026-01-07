@@ -1,0 +1,9 @@
+numpy
+pandas
+scikit-learn
+matplotlib
+tqdm
+python-dotenv
+google-genai
+ipykernel
+requests
