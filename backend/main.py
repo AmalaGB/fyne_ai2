@@ -31,7 +31,7 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
     try:
         # Use the most stable production model name
         response = client.models.generate_content(
-            model='gemini-1.5-flash', 
+            model='gemini-pro', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
             config=types.GenerateContentConfig(
                 system_instruction="Analyze feedback. Return ONLY JSON: {'user_reply': '...', 'summary': '...', 'actions': ['...']}",
@@ -70,4 +70,12 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
             ai_actions=["Manual review required"]
         ))
         db.commit()
+<<<<<<< HEAD
         return {"status": "partial_success", "ai_user_response": "Thank you!"}
+=======
+        return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
+
+@app.get("/api/admin/list")
+async def list_feedback(db: Session = Depends(database.get_db)):
+    return db.query(database.FeedbackRecord).order_by(database.FeedbackRecord.created_at.desc()).all()
+>>>>>>> 640bf58091b0579d12cc61ec0a48e77d990d59dd
