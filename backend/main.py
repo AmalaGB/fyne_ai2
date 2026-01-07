@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from google import genai 
 from google.genai import types 
-from google.api_core import exceptions
 import database, schemas
 
 # Initialize Database
@@ -28,9 +27,9 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 @app.post("/api/submit", response_model=schemas.SubmissionResponse)
 async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
-        # FIX: Changed model string to 'models/gemini-1.5-flash'
+        # Using the '-latest' alias which usually resolves versioning issues
         response = client.models.generate_content(
-            model='models/gemini-1.5-flash', 
+            model='gemini-1.5-flash-latest', 
             contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
             config=types.GenerateContentConfig(
                 system_instruction="Analyze feedback. Return ONLY JSON: {'user_reply': '...', 'summary': '...', 'actions': ['...']}",
@@ -38,13 +37,17 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
             )
         )
 
-        # Robust Parsing
-        if response.parsed:
+        # Handling different response formats
+        if hasattr(response, 'parsed') and response.parsed:
             ai_data = response.parsed
         else:
-            # Fallback for older SDK versions
-            ai_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
+            # Manual extraction in case 'parsed' is null
+            clean_text = response.text.strip()
+            if "```json" in clean_text:
+                clean_text = clean_text.split("```json")[1].split("```")[0].strip()
+            ai_data = json.loads(clean_text)
 
+        # Save Success to DB
         new_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
@@ -57,9 +60,9 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
         return {"status": "success", "ai_user_response": ai_data.get('user_reply')}
 
     except Exception as e:
-        # Log the actual error to Render
         print(f"!!! DIAGNOSTIC ERROR: {str(e)}")
         
+        # Fallback if AI still fails
         fallback_entry = database.FeedbackRecord(
             rating=request.rating,
             review_text=request.review_text,
