@@ -38,9 +38,18 @@ async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depe
                 
                 contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
                 config=types.GenerateContentConfig(
-                    system_instruction="Return ONLY a JSON object: {\"user_reply\": \"...\", \"summary\": \"...\", \"actions\": []}",
-                    response_mime_type="application/json"
-                )
+    system_instruction="""
+    You are a feedback analyzer. 
+    Output ONLY raw JSON. No markdown, no backticks.
+    Expected format:
+    {
+        "user_reply": "string",
+        "summary": "string",
+        "actions": ["string", "string"]
+    }
+    """,
+    response_mime_type="application/json"
+)
             )
 
             # Safely parse the response
