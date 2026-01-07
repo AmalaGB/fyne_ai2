@@ -4,7 +4,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import google.generativeai as genai
-from . import database, schemas
+import database, schemas
 
 app = FastAPI()
 
