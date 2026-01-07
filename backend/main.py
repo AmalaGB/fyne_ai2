@@ -1,136 +1,115 @@
 import os
 import json
+import uvicorn
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from google import genai
-from google.genai import types
+from google import genai 
+from google.genai import types 
 
-import database
-import schemas
-
-# --- DB SETUP ---
+# Internal imports
+import database, schemas
 from database import engine, Base
+
+# Initialize Database tables
 Base.metadata.create_all(bind=engine)
 
-# --- APP ---
-app = FastAPI()
+app = FastAPI(title="AI Feedback Analysis System")
 
+# Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], 
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- GEMINI CLIENT (STABLE) ---
-# IMPORTANT:
-# - Uses default API version
-# - Uses gemini-pro (ONLY stable text model)
+# --- AI CONFIGURATION ---
 client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
+    api_key=os.getenv("GEMINI_API_KEY"),
+    http_options=types.HttpOptions(api_version='v1')
 )
 
-# --- SUBMIT FEEDBACK ---
-@app.post("/api/submit", response_model=schemas.SubmissionResponse)
-async def submit_feedback(
-    request: schemas.SubmissionRequest,
-    db: Session = Depends(database.get_db)
-):
-    prompt = f"""
-You are an AI assistant analyzing user feedback for a product or service.
-
-Input:
-- Rating (1 to 5): {request.rating}
-- Review text: {request.review_text}
-
-Task:
-Return ONLY a valid JSON object with EXACTLY these keys:
-
-{{
-  "user_reply": "",
-  "summary": "",
-  "actions": []
-}}
+# Structured Prompt (PROMPT_V3)
+SYSTEM_PROMPT = """
+You are a senior Customer Success Analyst. 
 
 Rules:
-- No markdown
-- No explanations
-- No extra text
-- Output must be valid JSON only
-- Tone based on rating:
-  - 1–2: apologetic and corrective
-  - 3: neutral and improvement-focused
-  - 4–5: appreciative and reinforcing positives
-"""
+1. Return ONLY a single JSON object.
+2. Keys: "user_reply" (empathetic response), "summary" (brief internal notes), "actions" (list of tasks).
+3. No code fences (```), no backticks, no preamble.
 
+Example:
+Review: "App is great but keeps crashing."
+Output: {"user_reply": "Thanks for the feedback! We are fixing the crash.", "summary": "Positive sentiment with technical bug.", "actions": ["Fix checkout crash"]}
+""".strip()
+
+# --- ROUTES ---
+
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {
+        "status": "online",
+        "message": "AI Feedback API is running.",
+        "docs": "/docs"
+    }
+
+@app.post("/api/submit", response_model=schemas.SubmissionResponse)
+async def submit_feedback(request: schemas.SubmissionRequest, db: Session = Depends(database.get_db)):
     try:
+        # Generate structured AI analysis
         response = client.models.generate_content(
-            model="gemini-pro",
-            contents=prompt,
+            model='gemini-1.5-flash', 
+            contents=f"Rating: {request.rating}/5. Review: {request.review_text}",
             config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
                 response_mime_type="application/json"
             )
         )
 
-        # Parse Gemini output
+        # Parse JSON response
         if response.parsed:
             ai_data = response.parsed
         else:
-            ai_data = json.loads(response.text)
+            # Fallback for raw text cleanup
+            clean_text = response.text.strip().replace("```json", "").replace("```", "")
+            ai_data = json.loads(clean_text)
 
-        entry = database.FeedbackRecord(
+        # Create Database Record
+        new_entry = database.FeedbackRecord(
             rating=request.rating,
-            review_text=request.review_text[:1000],
-            ai_user_response=ai_data.get(
-                "user_reply", "Thank you for your feedback!"
-            ),
-            ai_summary=ai_data.get(
-                "summary", "Feedback received."
-            ),
-            ai_actions=ai_data.get(
-                "actions", ["Manual review recommended"]
-            )
+            review_text=request.review_text,
+            ai_user_response=ai_data.get('user_reply', "Thank you!"),
+            ai_summary=ai_data.get('summary', "Review processed."),
+            ai_actions=ai_data.get('actions', [])
         )
-
-        db.add(entry)
+        db.add(new_entry)
         db.commit()
-
-        return {
-            "status": "success",
-            "ai_user_response": entry.ai_user_response
-        }
+        
+        return {"status": "success", "ai_user_response": ai_data.get('user_reply')}
 
     except Exception as e:
-        # Graceful fallback (MANDATORY)
-        print("AI ERROR:", str(e))
-
+        print(f"!!! DIAGNOSTIC ERROR: {str(e)}")
+        # Graceful degradation: Save raw data if AI fails
         fallback = database.FeedbackRecord(
             rating=request.rating,
-            review_text=request.review_text[:1000],
+            review_text=request.review_text,
             ai_user_response="Thank you for your feedback!",
-            ai_summary="AI processing failed",
+            ai_summary="AI Analysis Pending (Service Error)",
             ai_actions=["Manual review required"]
         )
-
         db.add(fallback)
         db.commit()
+        return {"status": "partial_success", "ai_user_response": "Thank you for your feedback!"}
 
-        return {
-            "status": "partial_success",
-            "ai_user_response": "Thank you for your feedback!"
-        }
-
-# --- ADMIN LIST ---
 @app.get("/api/admin/list")
 async def list_feedback(db: Session = Depends(database.get_db)):
-    return (
-        db.query(database.FeedbackRecord)
-        .order_by(database.FeedbackRecord.created_at.desc())
-        .all()
-    )
+    """Retrieve all feedback records for the dashboard"""
+    return db.query(database.FeedbackRecord).order_by(database.FeedbackRecord.id.desc()).all()
 
-# --- ROOT ---
-@app.get("/")
-async def root():
-    return {"message": "AI Feedback API running"}
+# --- SERVER STARTUP ---
+if __name__ == "__main__":
+    # Ensure the app binds to 0.0.0.0 and the port provided by Render
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
